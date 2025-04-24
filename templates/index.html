@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STOCKAI - Reddit Stock Sentiment Analyzer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>STOCKAI</h1>
+            <p class="tagline">Live Reddit Sentiment for Trending Stocks</p>
+            <form id="searchForm">
+                <input type="text" id="searchInput" name="q" placeholder="Search stock ticker (e.g. TSLA, GME)" required>
+                <button type="submit">Search</button>
+            </form>
+            <div id="searchResult"></div>
+        </header>
+        <main>
+            <h2>Trending Stocks on Reddit</h2>
+            <div class="trending-list">
+                {% for s in trending %}
+                <div class="stock-card">
+                    <div class="ticker">{{ s.ticker }}</div>
+                    <div class="sentiment-bar">
+                        <div class="bar" style="width:{{ (s.sentiment + 1) * 50 }}%;background: {% if s.sentiment > 0.1 %}#4caf50{% elif s.sentiment < -0.1 %}#e53935{% else %}#bbb{% endif %};"></div>
+                    </div>
+                    <div class="sentiment-score">Sentiment: <b>{{ '%.2f' % s.sentiment }}</b> ({{ s.mentions }} mentions)</div>
+                </div>
+                {% endfor %}
+            </div>
+        </main>
+        <footer>
+            <div>&copy; 2025 STOCKAI — Built with Flask, Reddit & ML</div>
+        </footer>
+    </div>
+    <script>
+    document.getElementById('searchForm').onsubmit = async function(e) {
+        e.preventDefault();
+        const q = document.getElementById('searchInput').value;
+        const res = await fetch(`/search?q=${q}`);
+        const data = await res.json();
+        document.getElementById('searchResult').innerHTML = `<div class='stock-card'><div class='ticker'>${data.ticker}</div><div class='sentiment-score'>Sentiment: <b>${data.avg_sentiment.toFixed(2)}</b> (${data.mentions} mentions)</div></div>`;
+    }
+    </script>
+</body>
+</html>
