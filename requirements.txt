@@ -3,3 +3,4 @@ Werkzeug>=2.3.3
 praw==7.7.1
 pandas==2.1.4
 nltk==3.8.1
+yfinance==0.2.36

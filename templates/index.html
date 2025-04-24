@@ -8,6 +8,23 @@
 </head>
 <body>
     <div class="container">
+        <div class="sidebar-market-left">
+          <h3>Market Overview</h3>
+          <table class="market-table">
+            <tr><th>Index</th><th>Value</th><th>Change</th></tr>
+            {% for idx in market_overview %}
+            <tr>
+              <td>{{ idx.name }}</td>
+              <td>{{ idx.price if idx.price else 'N/A' }}</td>
+              <td style="color: {% if idx.change is not none and idx.change >= 0 %}#4caf50{% elif idx.change is not none %}#e53935{% else %}#fff{% endif %};">
+                {% if idx.change is not none %}
+                  {{ idx.change|round(2) }} ({% if idx.pct is not none %}{{ idx.pct|round(2) }}%{% endif %})
+                {% else %}-{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </table>
+        </div>
         <header>
             <h1>STOCKAI</h1>
             <p class="tagline">Live Reddit Sentiment for Trending Stocks</p>
@@ -19,30 +36,414 @@
         </header>
         <main>
             <h2>Trending Stocks on Reddit</h2>
-            <div class="trending-list">
+            <div class="trending-stocks-grid">
                 {% for s in trending %}
-                <div class="stock-card">
-                    <div class="ticker">{{ s.ticker }}</div>
-                    <div class="sentiment-bar">
-                        <div class="bar" style="width:{{ (s.sentiment + 1) * 50 }}%;background: {% if s.sentiment > 0.1 %}#4caf50{% elif s.sentiment < -0.1 %}#e53935{% else %}#bbb{% endif %};"></div>
+                <div class="stock-card {% if loop.first %}most-mentioned{% endif %}" onclick="showStockDetails('{{ s.ticker }}')">
+                    <div class="stock-logo-ticker">
+                        <img src="{{ s.logo_url }}" alt="{{ s.ticker }} logo" class="stock-logo" onerror="this.style.display='none'" />
+                        <span class="ticker">{{ s.ticker }}</span>
+                        {% if loop.first %}<span class="badge-most">Most Mentioned</span>{% endif %}
                     </div>
-                    <div class="sentiment-score">Sentiment: <b>{{ '%.2f' % s.sentiment }}</b> ({{ s.mentions }} mentions)</div>
+                    <div class="stock-price">Price: <b>{{ s.price if s.price else 'N/A' }} {{ s.currency if s.currency else '' }}</b></div>
+                    <canvas class="sparkline" id="sparkline-{{ s.ticker }}" width="100" height="22" data-sparkline="{{ s.sparkline | tojson }}"></canvas>
+                    <canvas class="sentiment-chart" id="sentiment-{{ s.ticker }}" width="100" height="22" data-sentiment="{{ s.sentiment_history | tojson }}"></canvas>
+                    <div class="stock-news">
+                      <span class="news-title">News:</span>
+                      <ul>
+                        {% for n in s.news %}
+                        <li><a href="{{ n.link }}" target="_blank">{{ n.title }}</a></li>
+                        {% endfor %}
+                        {% if not s.news %}<li>No recent news found.</li>{% endif %}
+                      </ul>
+                    </div>
                 </div>
                 {% endfor %}
             </div>
+            <div id="stockDetailsModal" class="modal" style="display:none;">
+                <div class="modal-content">
+                    <span class="close" onclick="closeStockDetails()">&times;</span>
+                    <div id="modalBody"></div>
+                </div>
+            </div>
+            <script>
+            function showStockDetails(ticker) {
+                fetch(`/search?q=${ticker}`)
+                  .then(res => res.json())
+                  .then(data => {
+                    let postsHtml = '';
+                    if (data.posts && data.posts.length > 0) {
+                        postsHtml = `<h4>Reddit Posts</h4>` + data.posts.map(post => `
+                            <div class='post-item'>
+                                <div class='post-title'><a href='${post.url}' target='_blank'>${post.title}</a></div>
+                                <div class='post-meta'>${post.created_utc} | Sentiment: <b>${post.score.toFixed(2)}</b></div>
+                                <div class='post-body'>${post.selftext ? post.selftext.substring(0, 200) : ''}${post.selftext && post.selftext.length > 200 ? '...' : ''}</div>
+                            </div>`).join('');
+                    } else {
+                        postsHtml = '<div>No Reddit posts found for this ticker.</div>';
+                    }
+                    document.getElementById('modalBody').innerHTML = `
+                        <div class='stock-card-modal'>
+                            <div class='ticker'>${data.ticker}</div>
+                            <div class='sentiment-score'>Sentiment: <b>${data.avg_sentiment.toFixed(2)}</b> (${data.mentions} mentions)</div>
+                            <div class='stock-price'>Current Price: <b>${data.price ? data.price + ' ' + data.currency : 'N/A'}</b></div>
+                        </div>
+                        ${postsHtml}
+                    `;
+                    document.getElementById('stockDetailsModal').style.display = 'block';
+                  });
+            }
+            function closeStockDetails() {
+                document.getElementById('stockDetailsModal').style.display = 'none';
+            }
+            </script>
+            <script>
+            function renderSparklines() {
+              document.querySelectorAll('.sparkline').forEach(canvas => {
+                const prices = JSON.parse(canvas.getAttribute('data-sparkline'));
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // Draw placeholder if no data
+                if (!prices || prices.length < 2) {
+                  ctx.strokeStyle = '#444';
+                  ctx.beginPath();
+                  ctx.moveTo(0, canvas.height/2);
+                  ctx.lineTo(canvas.width, canvas.height/2);
+                  ctx.stroke();
+                  return;
+                }
+                ctx.strokeStyle = prices[prices.length-1] > prices[0] ? '#4caf50' : '#e53935';
+                ctx.beginPath();
+                let min = Math.min(...prices), max = Math.max(...prices);
+                for (let i = 0; i < prices.length; i++) {
+                  let x = i * (canvas.width / (prices.length-1));
+                  let y = canvas.height - ((prices[i] - min) / (max - min + 0.0001)) * canvas.height;
+                  if (i === 0) ctx.moveTo(x, y);
+                  else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+              });
+            }
+            function renderSentimentCharts() {
+              document.querySelectorAll('.sentiment-chart').forEach(canvas => {
+                const scores = JSON.parse(canvas.getAttribute('data-sentiment'));
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                if (!scores || scores.length < 2) {
+                  ctx.strokeStyle = '#888';
+                  ctx.beginPath();
+                  ctx.moveTo(0, canvas.height/2);
+                  ctx.lineTo(canvas.width, canvas.height/2);
+                  ctx.stroke();
+                  return;
+                }
+                ctx.strokeStyle = '#2196f3';
+                ctx.beginPath();
+                let min = Math.min(...scores), max = Math.max(...scores);
+                for (let i = 0; i < scores.length; i++) {
+                  let x = i * (canvas.width / (scores.length-1));
+                  let y = canvas.height - ((scores[i] - min) / (max - min + 0.0001)) * canvas.height;
+                  if (i === 0) ctx.moveTo(x, y);
+                  else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+              });
+            }
+            window.addEventListener('DOMContentLoaded', function() {
+              renderSparklines();
+              renderSentimentCharts();
+            });
+            </script>
+            <style>
+            .trending-stocks-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+                gap: 1.2em;
+                margin-top: 1.5em;
+            }
+            .stock-card {
+                background: #222;
+                border-radius: 1em;
+                box-shadow: 0 2px 12px #0003;
+                padding: 1em 1.2em 1em 1em;
+                color: #fff;
+                cursor: pointer;
+                transition: transform 0.13s, box-shadow 0.13s;
+                position: relative;
+                min-height: 120px;
+            }
+            .stock-card:hover {
+                transform: translateY(-4px) scale(1.03);
+                box-shadow: 0 6px 18px #0006;
+            }
+            .stock-logo-ticker {
+                display: flex;
+                align-items: center;
+                margin-bottom: 0.5em;
+            }
+            .stock-logo {
+                width: 28px;
+                height: 28px;
+                margin-right: 0.7em;
+                border-radius: 50%;
+                background: #fff;
+                object-fit: contain;
+                border: 1px solid #444;
+            }
+            .modal {
+                display: none;
+                position: fixed;
+                z-index: 2000;
+                left: 0;
+                top: 0;
+                width: 100vw;
+                height: 100vh;
+                background: rgba(0,0,0,0.55);
+            }
+            .modal-content {
+                background: #222;
+                margin: 7% auto;
+                padding: 2em 2.5em;
+                border: 1px solid #888;
+                width: 90%;
+                max-width: 540px;
+                border-radius: 1em;
+                color: #fff;
+                position: relative;
+            }
+            .close {
+                color: #aaa;
+                position: absolute;
+                right: 1.2em;
+                top: 1.1em;
+                font-size: 2em;
+                font-weight: bold;
+                cursor: pointer;
+            }
+            .close:hover { color: #fff; }
+            .stock-card-modal { margin-bottom: 1.3em; }
+            .badge-most {
+                background: #4caf50;
+                color: #fff;
+                font-size: 0.82em;
+                padding: 0.18em 0.7em;
+                border-radius: 0.7em;
+                margin-left: 0.7em;
+                font-weight: 600;
+                letter-spacing: 0.01em;
+                vertical-align: middle;
+            }
+            .sparkline {
+                width: 100px !important;
+                height: 22px !important;
+                min-height: 22px;
+                margin-top: 0.5em;
+                background: #181818;
+                border-radius: 0.3em;
+                display: block;
+            }
+            .sentiment-chart {
+                width: 100px !important;
+                height: 22px !important;
+                min-height: 22px;
+                margin-top: 0.3em;
+                background: #181818;
+                border-radius: 0.3em;
+                display: block;
+            }
+            .stock-news {
+                margin-top: 0.4em;
+                font-size: 0.97em;
+            }
+            .stock-news ul {
+                margin: 0.2em 0 0 0;
+                padding-left: 1.1em;
+            }
+            .stock-news li {
+                margin-bottom: 0.1em;
+                color: #b3c0d0;
+            }
+            .stock-news .news-title {
+                font-weight: 500;
+                color: #fff;
+            }
+            .stock-news a {
+                color: #6ec6ff !important;
+                text-decoration: underline;
+                transition: color 0.15s;
+            }
+            .stock-news a:hover {
+                color: #90e2ff !important;
+            }
+            </style>
         </main>
         <footer>
             <div>&copy; 2025 STOCKAI — Built with Flask, Reddit & ML</div>
         </footer>
     </div>
+    <div class="sidebar-movers-right">
+      <div id="moversLoading" style="color:#fff;margin-bottom:0.7em;">Loading...</div>
+      <h3>Top 10 Gainers</h3>
+      <table class='movers-table' id='gainersTable' style="display:none"><tr><th>Ticker</th><th>Price</th><th>%</th></tr></table>
+      <h3 style="margin-top:1.5em;">Top 10 Losers</h3>
+      <table class='movers-table' id='losersTable' style="display:none"><tr><th>Ticker</th><th>Price</th><th>%</th></tr></table>
+    </div>
     <script>
+    // Fetch and render movers on page load
+    async function renderMoversSidebar() {
+      document.getElementById('moversLoading').style.display = 'block';
+      document.getElementById('gainersTable').style.display = 'none';
+      document.getElementById('losersTable').style.display = 'none';
+      const res = await fetch('/top-movers');
+      const data = await res.json();
+      let gainersHtml = data.gainers.map(m => `<tr><td>${m.ticker}</td><td>${m.price}</td><td style='color:#4caf50'>+${m.pct_change}%</td></tr>`).join('');
+      let losersHtml = data.losers.map(m => `<tr><td>${m.ticker}</td><td>${m.price}</td><td style='color:#e53935'>${m.pct_change}%</td></tr>`).join('');
+      document.getElementById('gainersTable').innerHTML += gainersHtml;
+      document.getElementById('losersTable').innerHTML += losersHtml;
+      document.getElementById('moversLoading').style.display = 'none';
+      document.getElementById('gainersTable').style.display = 'table';
+      document.getElementById('losersTable').style.display = 'table';
+    }
+    renderMoversSidebar();
     document.getElementById('searchForm').onsubmit = async function(e) {
         e.preventDefault();
         const q = document.getElementById('searchInput').value;
         const res = await fetch(`/search?q=${q}`);
         const data = await res.json();
-        document.getElementById('searchResult').innerHTML = `<div class='stock-card'><div class='ticker'>${data.ticker}</div><div class='sentiment-score'>Sentiment: <b>${data.avg_sentiment.toFixed(2)}</b> (${data.mentions} mentions)</div></div>`;
+        let postsHtml = '';
+        if (data.posts && data.posts.length > 0) {
+            postsHtml = `<button id='togglePostsBtn' style='margin:1em 0 0.5em 0;padding:0.5em 1em;background:#333;color:#fff;border:none;border-radius:0.5em;cursor:pointer;'>Show Reddit Posts ▼</button>
+            <div id='postList' class='post-list' style='display:none;'>` + data.posts.map(post => `
+                <div class='post-item'>
+                    <div class='post-title'><a href='${post.url}' target='_blank'>${post.title}</a></div>
+                    <div class='post-meta'>${post.created_utc} | Sentiment: <b>${post.score.toFixed(2)}</b></div>
+                    <div class='post-body'>${post.selftext ? post.selftext.substring(0, 200) : ''}${post.selftext && post.selftext.length > 200 ? '...' : ''}</div>
+                </div>`).join('') + `</div>`;
+        } else {
+            postsHtml = '<div>No Reddit posts found for this ticker.</div>';
+        }
+        document.getElementById('searchResult').innerHTML = `
+            <div class='stock-card'>
+                <div class='ticker'>${data.ticker}</div>
+                <div class='sentiment-score'>Sentiment: <b>${data.avg_sentiment.toFixed(2)}</b> (${data.mentions} mentions)</div>
+                <div class='stock-price'>Current Price: <b>${data.price ? data.price + ' ' + data.currency : 'N/A'}</b></div>
+            </div>
+            ${postsHtml}
+        `;
+        // Add expand/collapse logic
+        const btn = document.getElementById('togglePostsBtn');
+        const postList = document.getElementById('postList');
+        if (btn && postList) {
+            btn.onclick = function() {
+                if (postList.style.display === 'none') {
+                    postList.style.display = 'block';
+                    btn.innerText = 'Hide Reddit Posts ▲';
+                } else {
+                    postList.style.display = 'none';
+                    btn.innerText = 'Show Reddit Posts ▼';
+                }
+            }
+        }
     }
     </script>
+    <style>
+    .post-list {
+        margin-top: 1em;
+        display: flex;
+        flex-direction: column;
+        gap: 1em;
+    }
+    .post-item {
+        background: #232323;
+        border-radius: 0.7em;
+        padding: 1em;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+    }
+    .post-title {
+        font-weight: 700;
+        font-size: 1.05em;
+        margin-bottom: 0.2em;
+    }
+    .post-title a {
+        color: #4cafef;
+        text-decoration: none;
+    }
+    .post-title a:hover {
+        text-decoration: underline;
+    }
+    .post-meta {
+        color: #bbb;
+        font-size: 0.97em;
+        margin-bottom: 0.4em;
+    }
+    .post-body {
+        color: #ddd;
+        font-size: 0.99em;
+    }
+    .movers-table { background:#181818;color:#bbb;border-collapse:collapse;width:100%;margin-bottom:1em; font-size:0.97em; }
+    .movers-table th, .movers-table td { border:1px solid #222;padding:0.3em 0.5em;text-align:left; }
+    .movers-table th { background:#222;color:#fff; font-size:0.97em; }
+    .sidebar-movers-right {
+      position: fixed;
+      top: 5em;
+      right: 0;
+      background: #181818;
+      border-left: 1px solid #222;
+      padding: 1em 1.1em 1em 0.7em;
+      width: 210px;
+      z-index: 1000;
+      color: #bbb;
+      font-size: 0.97em;
+      height: 80vh;
+      overflow-y: auto;
+      box-shadow: -2px 0 8px #0005;
+    }
+    .sidebar-movers-right h3 { margin: 0.7em 0 0.3em 0; font-size: 1.07em; color: #fff; }
+    body { margin-left: 210px; margin-right: 230px; }
+    </style>
+    <style>
+      .sidebar-market-left {
+        position: fixed;
+        left: 0;
+        top: 0;
+        height: 100vh;
+        width: 210px;
+        background: #181818;
+        color: #fff;
+        padding: 2.4em 1.2em 1.2em 1.2em;
+        box-shadow: 2px 0 14px 0 #000a;
+        z-index: 100;
+        font-size: 1em;
+      }
+      .sidebar-market-left h3 {
+        font-size: 1.15em;
+        margin-bottom: 1em;
+        letter-spacing: 0.03em;
+        color: #fff;
+      }
+      .market-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: none;
+      }
+      .market-table th, .market-table td {
+        padding: 0.4em 0.2em;
+        text-align: left;
+        font-size: 0.98em;
+      }
+      .market-table th {
+        color: #a3a3a3;
+        font-weight: 400;
+        border-bottom: 1px solid #222;
+      }
+      .market-table tr:not(:last-child) td {
+        border-bottom: 1px solid #232323;
+      }
+      .market-table td {
+        font-family: 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+      }
+      @media (max-width: 900px) {
+        .sidebar-market-left { display: none; }
+      }
+    </style>
 </body>
 </html>
